@@ -1,7 +1,6 @@
 # Ryan Freedman
 # Giant Oak June 2014
 # MMPP code
-# start conversion of priors.m
 
 # -------------------------
 #   Start Type Definitions
@@ -17,6 +16,16 @@ using Distributions
 # didn't want to use if/elseif/else because they operate
 # differently than switch
 using Match
+
+# for reading matlab data files
+# i.e.) data.mat
+using MAT
+
+# for timing purposes
+using Calendar
+
+time_precomp = now()
+
 
 type prior <: total
     aL::Int32     # 1
@@ -56,8 +65,9 @@ end
     # EQUIV  : [3,3]
     # return value : samples 
 
-function sensorMCMC(N::Array,priors::prior,ITERS::Array,events::Array,EQUIV::Array)
-    priors = prior(1,1,zeros(1,7)+5,zeros(48,7)+1,9900,100,2500,7500,5,1/3,0)
+# NOTE: I changed the order of the arguments
+
+function sensorMCMC(N::Array,priors::prior,events::Array,ITERS::Array=[3,3],EQUIV::Array=[3,3])
 # samples = sensorMCMC(Data,priors,[Niter Nburn Nplot], events, EQUIV)
 #    Data   : (Ntimes x 7*Nweeks) matrix of count data (assumed starting Sunday)
 #    Priors : structure with parameter values of prior distributions
@@ -114,10 +124,10 @@ function sensorMCMC(N::Array,priors::prior,ITERS::Array,events::Array,EQUIV::Arr
     samples.logp_NgLM = zeros(1,Niter)
     samples.logp_NgLZ = zeros(1,Niter)
 
-    # MAIN LOOP: MCMC FOR INFERENCE
-    for iter=1:Niter+Nburn,
+    # MAIN LOOP: MCMC FunctionsOR INFERENCE
+    for iter=1:Niter+Nburn
         L = draw_L_N0(N0,priors,EQUIV)
-        [Z,N0,NE] = draw_Z_NLM(N,L,M,priors)
+        (Z,N0,NE) = draw_Z_NLM(N,L,M,priors)
         M = draw_M_Z(Z,priors)
         if (iter > Nburn)      # SAVE SAMPLES AFTER BURN IN
             samples.L[:,:,iter-Nburn] = L
@@ -509,48 +519,75 @@ end
 # Start Plotting Functions
 # --------------------
 
-function plotMMPP(L,Z,N,TRUTH,FIG::Integer = 1,RANGE::Integer = -1)
-# plotMMPP(Rate,PEvent,Data,Events,Fig,Range)
-# plot data and parameters of the Markov modulated Poisson process
-#   Rate   = estimated rate function; 
-#   PEvent = estimated probability of event;
-#   Data   = observed data; 
-#   Events = known event times;
-#   Fig    = figure handle / number to use
-#   Range  = sub-range of the data to plot (default is full length)
-#
-# Copyright (C) 2006 Alexander Ihler; distributable under GPL -- see README.txt
+# function plotMMPP(L,Z,N,TRUTH,FIG::Integer = 1,RANGE::Integer = -1)
+# # plotMMPP(Rate,PEvent,Data,Events,Fig,Range)
+# # plot data and parameters of the Markov modulated Poisson process
+# #   Rate   = estimated rate function; 
+# #   PEvent = estimated probability of event;
+# #   Data   = observed data; 
+# #   Events = known event times;
+# #   Fig    = figure handle / number to use
+# #   Range  = sub-range of the data to plot (default is full length)
+# #
+# # Copyright (C) 2006 Alexander Ihler; distributable under GPL -- see README.txt
 
-    if (RANGE != -1)
-        RANGE = 1:length(Z)
-    end
-    figure(FIG)
-    subplot(3,1,3,"replace") # ND
-    holdon()
-    S=stem(RANGE,Z[RANGE],"m")
-    set(S,"MarkerSize",0,"LineWidth",2) # ND
-    xlabel("Time") 
-    ylabel("P(event)")
-    if (~isempty(TRUTH))
-        holdon()
-        S=stem(RANGE,-.25*TRUTH[RANGE],"b")
-        set(S,"MarkerSize",0,"LineWidth",1) # ND
-    end
-    figure(FIG)
-    subplot(3,1,1:2,"replace") # ND
-    holdon()
-    H=plot(RANGE,N[RANGE],"b")
-    H=plot(RANGE,L[RANGE],"r")  
-    ylabel("Counts")
-    legend("Observed","Profile") # ND
-end
+#     if (RANGE != -1)
+#         RANGE = 1:length(Z)
+#     end
+#     figure(FIG)
+#     subplot(3,1,3,"replace") # ND
+#     holdon()
+#     S=stem(RANGE,Z[RANGE],"m")
+#     set(S,"MarkerSize",0,"LineWidth",2) # ND
+#     xlabel("Time") 
+#     ylabel("P(event)")
+#     if (~isempty(TRUTH))
+#         holdon()
+#         S=stem(RANGE,-.25*TRUTH[RANGE],"b")
+#         set(S,"MarkerSize",0,"LineWidth",1) # ND
+#     end
+#     figure(FIG)
+#     subplot(3,1,1:2,"replace") # ND
+#     holdon()
+#     H=plot(RANGE,N[RANGE],"b")
+#     H=plot(RANGE,L[RANGE],"r")  
+#     ylabel("Counts")
+#     legend("Observed","Profile") # ND
+# end
 
-function holdon()
-    if(hold() == false)
-        hold()
-    end
-end
+# function holdon()
+#     if(hold() == false)
+#         hold()
+#     end
+# end
 
+# --------------------
+# End Plotting Functions
+# --------------------
+# Start Function Calls
+# --------------------
 
+# delete all of this if you want only function definitions
 
-    
+time_postcomp = now()
+
+# make sure we are in the correct directory otherwise we won't be able to find
+# data.mat
+vars = matread("data.mat")
+time_postdata = now()
+# can look at Nin through vars["Nin"], vars is a dictionary containing all info in
+# the file data.mat
+event = vars["event_times"]
+Ni = vars["Nin"]
+No = vars["Nout"]
+pri = prior(1,1,zeros(1,7)+5,zeros(48,7)+1,9900,100,2500,7500,5,1/3,0)
+time_postparse = now()
+sensorMCMC(Ni,pri,event)
+time_posttest = now()
+
+println("Results - ")
+println("Compilation Time : $time_precomp - $time_postcomp = $(second(time_precomp) - second(time_postcomp))")
+println("Data Read Time   : $time_postcomp - $time_postdata = $(second(time_postcomp) - second(time_postdata))")
+println("Parsing Time     : $time_postdata - $time_postparse = $(second(time_postdata) - second(time_postparse))")
+println("Execution Time   : $time_postparse - $time_posttest = $(second(time_postparse) - second(time_posttest))")
+
