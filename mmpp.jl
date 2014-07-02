@@ -22,10 +22,7 @@ using Match
 using MAT
 
 # for timing purposes
-using Calendar
-
-time_precomp = now()
-
+time_precomp = time()
 
 type prior <: total
     aL::Int32     # 1
@@ -49,6 +46,8 @@ type sample <: total
     NE::Array
     logp_NgLM::Array
     logp_NgLZ::Array
+    logpC::Float64
+    logpGD::Float64
 end
 
 # -------------------------
@@ -67,7 +66,9 @@ end
 
 # NOTE: I changed the order of the arguments
 
-function sensorMCMC(N::Array,priors::prior,events::Array,ITERS::Array=[3,3],EQUIV::Array=[3,3])
+
+
+function sensorMCMC(N::Array,priors::prior,events::Array,ITERS::Array=[25,50,10],EQUIV::Array=[3,3])
 # samples = sensorMCMC(Data,priors,[Niter Nburn Nplot], events, EQUIV)
 #    Data   : (Ntimes x 7*Nweeks) matrix of count data (assumed starting Sunday)
 #    Priors : structure with parameter values of prior distributions
@@ -107,25 +108,25 @@ function sensorMCMC(N::Array,priors::prior,events::Array,ITERS::Array=[3,3],EQUI
         3 => @printf "Time profile unshared.\n"
     end
     @printf "Running for %d iterations, with %d for burn-in and plotting every %d.\n" Niter Nburn Nplot
-    Z=zeros(size(N),size(N))
+    Z=zeros(size(N)[1],size(N)[2])
     N0=max(N,1)
-    NE=zeros(size(N),size(N))
-    L=(N+5)/2
+    NE=zeros(size(N)[1],size(N)[2])
+    L=(N.+5)/2
     M=[.999 .5;.001 .5]
-    xs = 0:80
     Nd=7
     Nh=size(N,1)
-    samples = sample(zeros(1),zeros(1),zeros(1),zeros(1),zeros(1),zeros(1),zeros(1))
-    samples.L = zeros([size(L),Niter],[size(L),Niter])
-    samples.Z = zeros([size(Z),Niter],[size(Z),Niter])
-    samples.M = zeros([size(M),Niter],[size(M),Niter])
-    samples.N0 =zeros([size(N0),Niter],[size(N0),Niter])
-    samples.NE =zeros([size(NE),Niter],[size(NE),Niter])
+    samples = sample(zeros(1),zeros(1),zeros(1),zeros(1),zeros(1),zeros(1),zeros(1),0,0)
+    samples.L = zeros(size(L)[1],size(L)[2],Niter)
+    samples.Z = zeros(size(Z)[1],size(Z)[2],Niter)
+    samples.M = zeros(size(M)[1],size(M)[2],Niter)
+    samples.N0 =zeros(size(N0)[1],size(N0)[2],Niter)
+    samples.NE =zeros(size(NE)[1],size(NE)[2],Niter)
     samples.logp_NgLM = zeros(1,Niter)
     samples.logp_NgLZ = zeros(1,Niter)
 
     # MAIN LOOP: MCMC FunctionsOR INFERENCE
-    for iter=1:Niter+Nburn
+    x = Niter+Nburn
+    for iter=1:x
         L = draw_L_N0(N0,priors,EQUIV)
         (Z,N0,NE) = draw_Z_NLM(N,L,M,priors)
         M = draw_M_Z(Z,priors)
@@ -138,27 +139,19 @@ function sensorMCMC(N::Array,priors::prior,events::Array,ITERS::Array=[3,3],EQUI
             samples.logp_NgLM[iter-Nburn] = eval_N_LM(N,L,M,priors)
             samples.logp_NgLZ[iter-Nburn] = eval_N_LZ(N,L,Z,priors)
         end
-        #@printf(".")         # DISPLAY / PLOT CURRENT SAMPLES & AVERAGES
-        #mmppPlot(L,Z,N,events,100)
-        #title("MCMC Samples")
-        pause(.5)
         if (mod(iter,Nplot)==0 && iter > Nburn)  
-            #mmppPlot(mean(samples.L[:,:,1:iter-Nburn],3), ...
-            #figure(101)
-            #title("Posterior Averages")
             (logpC, logpGD, logpGDz) = logp(N,samples,priors,iter-Nburn,EQUIV)
             logpC=logpC/log(2)
             logpGD=logpGD/log(2)
             logpGDz=logpGDz/log(2)
-            @printf "\n  Est Marginal Likelihd: ln P(Data) = %.1f  (%.3f per time)\n" logpC logpC/length(N)
-            pause(.1)
+            #@printf "\n  Est Marginal Likelihd: ln P(Data) = %.1f  (%.3f per time)\n" logpC logpC/length(N)
         end
     end
-    q = logp(N,samples,priors,iter-Nburn,EQUIV)
+    q = logp(N,samples,priors,Niter,EQUIV)
     logpC = q[1]/log(2)
     logpGD = q[2]/log(2)
     logpGDz = q[3]/log(2)
-    @printf "\n  Est Marginal Likelihd: ln P(Data) = %.1f  (%.3f per time)\n" logpC logpC/length(N)
+    #@printf "\n  Est Marginal Likelihd: ln P(Data) = %.1f  (%.3f per time)\n" logpC logpC/length(N)
     samples.logpC = logpC
     samples.logpGD= logpGD
     return samples
@@ -173,30 +166,34 @@ end
 
 # return value : tuple (logpC,logpGD,logpGDz) 
 
-function logp(N,sample,priors,iter,EQUIV)
+function logp(N,samples,priors,iter,EQUIV)
     # Gelfand-Dey Estimate
-    tmp = sample.logp_NgLZ[1:iter]
+    tmp = samples.logp_NgLZ[1:iter]
     tmpm = mean(tmp)
-    tmp = tmp - tmpm
-    logpGDz = log(1.0/mean(1.0/exp(tmp)))+tmpm
+    tmp = tmp .- tmpm
+    logpGDz = log(1.0/mean(1.0./exp(tmp)))+tmpm
 
     # Gelfand-Dey Estimate, Margianalizing over Z
-    tmp = sample.log_NgLM[1:iter]
+    tmp = samples.logp_NgLM[1:iter]
     tmpm = mean(tmp)
-    tmp = tmp - tmpm
-    logpGD = log(1.0/mean(1.0/exp(tmp)))+tmpm
+    tmp = tmp .- tmpm
+    logpGD = log(1.0./mean(1.0./exp(tmp)))+tmpm
 
     Lstar = mean(samples.L[:,:,1:iter],3)
-    Mstar = eman(samples.M[:,:,1:iter],3)
+    Mstar = mean(samples.M[:,:,1:iter],3)
     logp_LMgN = zeros(1,iter)
-    logp_LM = eval_L_N0(Lstar,[],priors,EQUIV) + eval_M_Z(Mstar,[],priors)
+    temp_Qq = [0] # weird thing about julia #489: empty arrays are of type Array{None}
+    pop!(temp_Qq) # this makes it Array{Int64,0}
+    # this comes up in the sum function, we cannot sum the elements of a 0-element array
+    # if it has no element type
+    # however if it has an element type then we can sum the elements
+    logp_LM = eval_L_N0(Lstar,temp_Qq,priors,EQUIV) + eval_M_Z(Mstar,[],priors)
     logp_NgLM = eval_N_LM(N,Lstar,Mstar, priors)
-
     for ii = 1:iter
-        logp_LMgN[ii] = eval_L_N0(Lstar,samples.N0[:,:,ii],EQUIV) #=splat?=# + eval_M_Z(Mstar,samples.Z(:,:,ii),priors)
+        logp_LMgN[ii] = eval_L_N0(Lstar,samples.N0[:,:,ii],priors,EQUIV) + eval_M_Z(Mstar,samples.Z[:,:,ii],priors)
     end
     tmpm = mean(logp_LMgN)
-    logp_LMgN = logp_LMgN - tmpm
+    logp_LMgN = logp_LMgN .- tmpm
     logp_LMgN = log(mean(exp(logp_LMgN))) + tmpm
     logpC = logp_NgLM + logp_LM - logp_LMgN
     return (logpC,logpGD,logpGDz)
@@ -210,12 +207,13 @@ function eval_M_Z(M,Z,priors)
     if  ~isempty(Z)
         n0  = length(find(find_custom(0,Z[1:end - 1])))
         n1  = length(find(find_custom(1,Z[1:end - 1])))
-        n01 = length(find(find_custom(0,Z[1:end - 1]) & find_custom(1,Z[2:end])))
-        n10 = length(find(find_custom(1,Z[1:end - 1]) & find_custom(0,Z[2:end])))
+        n01 = length(find(andit(find_custom(0,Z[1:end - 1]), find_custom(1,Z[2:end]))))
+        n10 = length(find(andit(find_custom(1,Z[1:end - 1]), find_custom(0,Z[2:end]))))
     else
         n0,n1,n01,n10 = 0,0,0,0
     end
-    logp = log(Betapdf(z0,n01+priors.z01,n0-n01+priors.z00)) + log(Betapdf(z1,n10+priors.z10,n1-n10+priors.z11))
+    ret_val = log(pdf(Beta(n01+priors.z01,n0-n01+priors.z00),z0)) + log(pdf(Beta(n10+priors.z10,n1-n10+priors.z11),z1))
+    return ret_val
 end
 
 # return value : logp
@@ -224,6 +222,21 @@ function eval_L_N0(L,N0,priors,EQUIV)
     L0 = mean(mean(L))
     Nd = 7
     Nh = size(L,1)
+    D = zeros(Nd)
+    A = zeros(Nh,Nd)
+    for i = 1:Nd
+        D[i] = mean(L[:,i]/L0)
+    end
+    for i = 1:Nd
+        for j = 1:Nh
+            A[j,i] = L[j,i]/(L0/D[i])
+        end
+    end
+    ret_val = 0
+    paD = priors.aD
+    aD = zeros(1,Nd)
+    paH = priors.aH
+    aH = zeros(Nh,Nd)
     if  ~isempty(N0)
         for i = 1:Nd
             aD[i] = sum(sum(N0[:,i:Nd:end]))
@@ -244,10 +257,11 @@ function eval_L_N0(L,N0,priors,EQUIV)
         3 => A, aH, paH = A, aH, paH
     end
     ret_val = 0
-    ret_val = ret_val + log(gampdf(L0,sum(sum(N0)) + priors.aL, 1/(length(N0)+priors.bL)))
+    # i need to add the 1e-99 because julia does not have an infinity integrated with the distributions package...
+    ret_val = ret_val + log((pdf(Gamma(sum(sum(N0)) + 1e-99),L0)) + priors.aL, 1/(length(N0)+priors.bL))
     ret_val = ret_val + dirlnpdf(D/Nd,aD+paD)
     for i=1:size(A,2),
-        logp = logp + dirlnpdf(A[:,i]/Nh,aH[:,i]+paH[:,i]);
+        ret_val = ret_val + dirlnpdf(A[:,i]/Nh,aH[:,i]+paH[:,i]);
     end
     return ret_val
 end
@@ -265,16 +279,21 @@ function eval_N_LZ(N,L,Z,priors)
             end
         end
     end
+    return ret_val
 end
 
 # return value : logp 
 
 function eval_N_LM(N,L,M,priors)
-    (pRIOR, po, p) = (M^100 * [1 0], zeros(2,length(N)), zeros(2,length(N)))
+    #M = [1 1;1 1] # WARNING!!!! NEED TO REMOVE!!!!!!
+    temp_M = [M[1] M[2];M[3] M[4]]
+
+    (pRIOR, po, p) = (temp_M^100 .* [1,0], zeros(2,length(N)), zeros(2,length(N)))
+    (pRIOR, po, p) = ([1,0], zeros(2,length(N)), zeros(2,length(N)))
     for t=1:length(N)
         if N[t] != -1
             po[1,t] = poisspdf(N[t],L[t])
-            po[2,t] = sum(poisspdf(0:N[t],L[t])) .* nbinpdf(N[t]:-1:0,priors.aE,priors.bE/(1+priors.bE))
+            po[2,t] = sum(poisspdf(0:N[t],L[t])) .* nbinpdf(N[t]:-1:0,priors.aE,priors.bE/(1+priors.bE))[1]
         else
             po[1,t],po[2,t] = 1,1
         end
@@ -284,7 +303,7 @@ function eval_N_LM(N,L,M,priors)
     ret_val = log(sp)
     p[:,1]=p[:,1]/sp
     for t=2:length(N)
-        p[:,t] = (M*p[:,t-1]).*po[:,t]
+        p[:,t] = (temp_M * p[:,t-1]).*po[:,t]
         sp = sum(p[:,t])
         ret_val = ret_val + log(sp)
         p[:,t] = p[:,t]/sp
@@ -306,7 +325,7 @@ function dirpdf(X,A)
         p = 1
         return p
     end
-    logp = sum((A-1).*log(X)) - sum(Gammaln(A)) + Gammaln(sum(A))
+    logp = sum((A-1).*log(X)) - sum(log(gamma(A))) + log(gamma(sum(A)))
     p = exp(logp)
     return p
 end
@@ -319,14 +338,14 @@ function dirlnpdf(X,A)
         p=1
         return 0
     end
-    ret_val = sum((A-1).*log(X)) - sum(Gammaln(A)) + Gammaln(sum(A))
+    ret_val = sum((A.-1).*log(X)) .- sum(log(gamma(A))) + log(gamma(sum(A)))
     return ret_val
 end
 
 # return value : p 
 
 function poisspdf(X,L)
-    lnp = -L -Gammaln(X+1) +log(L).*X
+    lnp = - L .- log(gamma(X+1)).+log(L).*X
     p = exp(lnp)
     return p
 end
@@ -334,14 +353,14 @@ end
 # return value : lnp
 
 function poisslnpdf(X,L)
-    lnp = -L -Gammaln(X+1) +log(L).*X
+    lnp = -L .-log(gamma(X+1)) +log(L).*X
     return lnp
 end
 
 # return value : p
 
 function nbinpdf(X,R,P)
-    lnp = Gammaln(X+R) - Gammaln(R) - Gammaln(X+1) + log(P).*R + log(1-P).*X
+    lnp = log(gamma(X+R)) .- log(gamma(R)) - log(gamma(X+1)) .+ log(P).*R + log(1-P).*X
     p = exp(lnp)
     return p
 end
@@ -349,7 +368,7 @@ end
 # return value : lnp
 
 function nbinlnpdf(X,R,P)
-    lnp = Gammaln(X+R) - Gammaln(R) - Gammaln(X+1) + log(P).*R + log(1-P).*X
+    lnp = log(gamma(X+R)) .- log(gamma(R)) .- log(gamma(X+1)) .+ log(P).*R .+ log(1-P).*X
     return lnp
 end
 
@@ -392,16 +411,16 @@ function draw_Z_NLM(N,L,M,priors)
     #---------------------------------------------------------------------
     # Do backward sampling
     for t=length(N):-1:1
-        if (rand(1) > p[1,t])                           # if event at time t
+        if (rand(1)[1] > p[1,t])                           # if event at time t
             if (N[t]!=-1)
                 Z[t] = 1
                 # likelihood of all possible event/normal combinations (all
                 # possible values of N(E)
-                ptmp = poisslnpdf(0:N[t],L[t]) + nbinlnpdf(N[t]:-1:0,priors.aE,priors.bE/(1+priors.bE))
-                ptmp=ptmp-max(ptmp)
+                ptmp = poisslnpdf(0:N[t],1)#L[t]) + nbinlnpdf(N[t]:-1:0,priors.aE,priors.bE/(1+priors.bE))
+                ptmp=ptmp.-maximum(ptmp)        # WARNING!!!!!!
                 ptmp=exp(ptmp)
                 ptmp=ptmp/sum(ptmp)
-                N0[t] = min(find(cumsum(ptmp) >= rand(1)))-1  # draw sample of N0
+                N0[t] = minimum(find(find_ge(rand(1)[1],cumsum(ptmp)))).-1  # WARNING!!!!!!
                 NE[t] = N[t]-N0[t]                              # and compute NE
             else
                 Z[t]=1
@@ -429,13 +448,25 @@ function draw_Z_NLM(N,L,M,priors)
     return (Z,N0,NE)
 end
 
+function find_ge(value,A::Array)
+    ret_val = zeros(A)
+    index = 1
+    for i in A
+        if i >= value
+            ret_val[index] = 1
+        end
+        index = index + 1
+    end
+    return ret_val
+end
+
 # return value : 
 
 function draw_M_Z(Z,priors)
     # GIVEN Z, SAMPLE M
-    n01 = length(find(find_custom(0,Z[1:end-1]) & find_custom(1,Z[2:end])))
+    n01 = length(find(andit(find_custom(0,Z[1:end-1]),find_custom(1,Z[2:end]))))
     n0 = length(find(find_custom(0,Z[1:end-1])))
-    n10 = length(find(find_custom(1,Z[1:end-1]) & find_custom(0,Z[2:end])))
+    n10 = length(find(andit(find_custom(1,Z[1:end-1]),find_custom(0,Z[2:end]))))
     n1 = length(find(find_custom(1,Z[1:end-1])))
     z0 = rand(Beta(n01+priors.z01,n0-n01+priors.z00))
     z1 = rand(Beta(n10+priors.z10,n1-n10+priors.z11))
@@ -443,7 +474,7 @@ function draw_M_Z(Z,priors)
     return M
 end
 
-function find_custom(value::Int64,A::Array)
+function find_custom(value,A::Array)
     ret_val = zeros(A)
     index = 1
     for i in A
@@ -455,23 +486,36 @@ function find_custom(value::Int64,A::Array)
     return ret_val
 end
 
+# and not working between two arrays
+function andit(A::Array,B::Array)
+    ret_val = zeros(A)
+    for i = 1:length(A)
+        if(A[i] == 1 || B[i] == 1)
+            ret_val[i] = 1
+        else
+            ret_val[i] = 0
+        end
+    end
+    return ret_val
+end
+
 # return value :
 
 function draw_L_N0(N0,priors,EQUIV)
     Nd=7
     Nh=size(N0,1)
     # 1st: OVERALL AVERAGE RATE
-    if (priors.MODE)
-        L0 = (sum(sum(N0))+priors.aL)/(length(N0)+priors.bL)
+    if (priors.MODE != 0)
+        L0 = (sum(N0)+priors.aL)/(length(N0)+priors.bL)
     else
-        L0 = rand(Gamma(sum(sum(N0))+priors.aL,1/(length(N0)+priors.bL)))
+        L0 = rand(Gamma((sum(N0))+priors.aL,1/(length(N0)+priors.bL)))
     end
-    L = zeros(size(N0),size(N0)) + L0
+    L = zeros(size(N0)[1],size(N0)[2]).+L0
     # 2nd: DAY EFFECT
     D = zeros(1,Nd)
     for i=1:length(D)
-        alpha = sum(sum(N0[:,i:7:end]))+priors.aD[i]
-        if (priors.MODE) 
+        alpha = sum(N0[:,i:7:end])+priors.aD[i]
+        if (priors.MODE != 0) 
             D[i] = (alpha-1)           # mode of Gamma(a,1) distribution
         else
             D[i] = rand(Gamma(alpha,1))
@@ -481,8 +525,8 @@ function draw_L_N0(N0,priors,EQUIV)
     A = zeros(Nh,Nd)
     for tau=1:size(A,2)
         for i=1:size(A,1),
-            alpha = sum(sum(N0[i,tau:7:end]))+priors.aH[i]
-            if (priors.MODE)
+            alpha = (sum(N0[i,tau:7:end]))+priors.aH[i]
+            if (priors.MODE != 0)
                 A[i,tau] = (alpha-1)          # mode of Gamma(a,1) distribution
             else
                 A[i,tau] = rand(Gamma(alpha,1))
@@ -569,25 +613,25 @@ end
 
 # delete all of this if you want only function definitions
 
-time_postcomp = now()
+time_postcomp = time()
 
 # make sure we are in the correct directory otherwise we won't be able to find
 # data.mat
 vars = matread("data.mat")
-time_postdata = now()
+time_postdata = time()
 # can look at Nin through vars["Nin"], vars is a dictionary containing all info in
 # the file data.mat
 event = vars["event_times"]
 Ni = vars["Nin"]
 No = vars["Nout"]
 pri = prior(1,1,zeros(1,7)+5,zeros(48,7)+1,9900,100,2500,7500,5,1/3,0)
-time_postparse = now()
+time_postparse = time()
 sensorMCMC(Ni,pri,event)
-time_posttest = now()
+time_posttest = time()
 
 println("Results - ")
-println("Compilation Time : $time_precomp - $time_postcomp = $(second(time_precomp) - second(time_postcomp))")
-println("Data Read Time   : $time_postcomp - $time_postdata = $(second(time_postcomp) - second(time_postdata))")
-println("Parsing Time     : $time_postdata - $time_postparse = $(second(time_postdata) - second(time_postparse))")
-println("Execution Time   : $time_postparse - $time_posttest = $(second(time_postparse) - second(time_posttest))")
+println("Compilation Time : $time_precomp - $time_postcomp = $(-(time_precomp) + (time_postcomp))")
+println("Data Read Time   : $time_postcomp - $time_postdata = $(-(time_postcomp) + (time_postdata))")
+println("Parsing Time     : $time_postdata - $time_postparse = $(-(time_postdata) + (time_postparse))")
+println("Execution Time   : $time_postparse - $time_posttest = $(-(time_postparse) + (time_posttest))")
 
