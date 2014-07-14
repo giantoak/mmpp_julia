@@ -21,6 +21,8 @@ using Match
 # i.e.) data.mat
 using MAT
 
+using Winston
+
 # for timing purposes
 time_precomp = time()
 
@@ -68,7 +70,7 @@ end
 
 
 
-function sensorMCMC(N::Array,priors::prior,events::Array,ITERS::Array=[25,50,10],EQUIV::Array=[3,3])
+function sensorMCMC(N::Array,priors::prior,events::Array,ITERS::Array=[50,25,10],EQUIV::Array=[3,3])
 # samples = sensorMCMC(Data,priors,[Niter Nburn Nplot], events, EQUIV)
 #    Data   : (Ntimes x 7*Nweeks) matrix of count data (assumed starting Sunday)
 #    Priors : structure with parameter values of prior distributions
@@ -95,19 +97,19 @@ function sensorMCMC(N::Array,priors::prior,events::Array,ITERS::Array=[25,50,10]
     Nplot = temp[1]
     Nburn = temp[2]
     Niter = temp[3]
-    @printf "Running the Markov-modulated Poisson model...\n"
-    @printf "Data is %d days long with %d measurements per day;\n" size(N,2) size(N,1)
-    @match EQUIV[1] begin # d(t)
-        1 => @printf "All days share total (per day) rate; "
-        2 => @printf "Weekend/weekdays share total (per day) rate; "
-        3 => @printf "Total (per day) rate unshared; "
-    end
-    @match EQUIV[1] begin # h(t)
-        1 => @printf "All days share time profile.\n"
-        2 => @printf "Weekend/weekdays share time profile.\n"
-        3 => @printf "Time profile unshared.\n"
-    end
-    @printf "Running for %d iterations, with %d for burn-in and plotting every %d.\n" Niter Nburn Nplot
+    # @printf "Running the Markov-modulated Poisson model...\n"
+    # @printf "Data is %d days long with %d measurements per day;\n" size(N,2) size(N,1)
+    # @match EQUIV[1] begin # d(t)
+        # 1 => @printf "All days share total (per day) rate; "
+        # 2 => @printf "Weekend/weekdays share total (per day) rate; "
+        # 3 => @printf "Total (per day) rate unshared; "
+    # end
+    # @match EQUIV[1] begin # h(t)
+        # 1 => @printf "All days share time profile.\n"
+        # 2 => @printf "Weekend/weekdays share time profile.\n"
+        # 3 => @printf "Time profile unshared.\n"
+    # end
+    # @printf "Running for %d iterations, with %d for burn-in and plotting every %d.\n" Niter Nburn Nplot
     Z=zeros(size(N)[1],size(N)[2])
     N0=max(N,1)
     NE=zeros(size(N)[1],size(N)[2])
@@ -182,44 +184,98 @@ function logp(N,samples,priors,iter,EQUIV)
     Lstar = mean(samples.L[:,:,1:iter],3)
     Mstar = mean(samples.M[:,:,1:iter],3)
     logp_LMgN = zeros(1,iter)
-    temp_Qq = [0] # weird thing about julia #489: empty arrays are of type Array{None}
+    temp_Qq = [0] # weird thing about julia: empty arrays are of type Array{None}
     pop!(temp_Qq) # this makes it Array{Int64,0}
     # this comes up in the sum function, we cannot sum the elements of a 0-element array
     # if it has no element type
     # however if it has an element type then we can sum the elements
-    logp_LM = eval_L_N0(Lstar,temp_Qq,priors,EQUIV) + eval_M_Z(Mstar,[],priors)
+    # @printf "prior to first call\n"
+    temp_test_x = eval_L_N0(Lstar,temp_Qq,priors,EQUIV) # NaN
+    temp_test_y = eval_M_Z(Mstar,temp_Qq,priors) # -Inf
+    # @printf "temptestx = %f, temptesty = %f \n" temp_test_x temp_test_y
+    logp_LM = temp_test_x + temp_test_y
     logp_NgLM = eval_N_LM(N,Lstar,Mstar, priors)
     for ii = 1:iter
-        logp_LMgN[ii] = eval_L_N0(Lstar,samples.N0[:,:,ii],priors,EQUIV) + eval_M_Z(Mstar,samples.Z[:,:,ii],priors)
+        # println("In the loop: iter number : $ii \n")
+        tempx = eval_L_N0(Lstar,samples.N0[:,:,ii],priors,EQUIV)
+        tempy = eval_M_Z(Mstar,samples.Z[:,:,ii],priors)
     end
     tmpm = mean(logp_LMgN)
     logp_LMgN = logp_LMgN .- tmpm
-    logp_LMgN = log(mean(exp(logp_LMgN))) + tmpm
+    logp_LMgN = log(mean(exp(logp_LMgN)) + 1e-99) + tmpm
     logpC = logp_NgLM + logp_LM - logp_LMgN
+    # println("LMGN = $(logp_LMgN); NGLM = $(logp_NgLM); LM = $(logp_LM)")
+    
+    # there is a problem with logp_LM
+    # there is also a problem with logp_LMgN
+
+    # this is indicative of eval_L_N0 or eval_M_Z being incorrect
+    # either that or the parameters Lstar,priors,Mstar, or samples
+
+    # after looking at these params I don't think they are the issue
+    # I can also eliminate passing the empty array (of type Array::None)
+    # because no error/warning is thrown (I think)
+
+    # Following the functions down a bit I determined that the NaN is a 
+    # Inf - Inf when the function "misses"
+
     return (logpC,logpGD,logpGDz)
 end
 
-# return value : logp
-
-function eval_M_Z(M,Z,priors)
-    z1 = M[1,2]
-    z0 = M[2,1]
-    if  ~isempty(Z)
+function eval_M_Z(M,Z,prior)
+    z1 = M[1,2];
+    z0 = M[2,1];
+    # println("$M") # Problem is with M... it's not the same as it should be
+    if (~isempty(Z))
         n0  = length(find(find_custom(0,Z[1:end - 1])))
         n1  = length(find(find_custom(1,Z[1:end - 1])))
         n01 = length(find(andit(find_custom(0,Z[1:end - 1]), find_custom(1,Z[2:end]))))
         n10 = length(find(andit(find_custom(1,Z[1:end - 1]), find_custom(0,Z[2:end]))))
     else
-        n0,n1,n01,n10 = 0,0,0,0
-    end
-    ret_val = log(pdf(Beta(n01+priors.z01,n0-n01+priors.z00),z0)) + log(pdf(Beta(n10+priors.z10,n1-n10+priors.z11),z1))
-    return ret_val
+        # println("M21 = $(M[2,1]) M12 = $(M[1,2])")
+        n01=0;
+        n0=0;
+        n10=0;
+        n1=0; 
+    end;
+    retval = log(pdf(Beta(n01+prior.z01,n0-n01+prior.z00),z0) + 1e-99) + log(pdf(Beta(n10+prior.z10,n1-n10+prior.z11),z1) + 1e-99);
+    # if retval == -Inf
+    #     println("01: $(prior.z01) ;00: $(prior.z00) ;0: $(z0) ;10: $(prior.z10) ;11: $(prior.z11) ;1: $(z1)  <- MISS! \n")
+    # end
+    return retval
 end
 
-# return value : logp
+
+
+
+# 1st attempt at writing evalMZ and evalLN0, please ignore# return value : logp
+
+# function eval_M_Z(M,Z,priors)
+#     z1 = M[1,2]
+#     z0 = M[2,1]
+#     if  ~isempty(Z)
+#         # @printf "Hit! \n"
+#         n0  = length(find(find_custom(0,Z[1:end - 1])))
+#         n1  = length(find(find_custom(1,Z[1:end - 1])))
+#         n01 = length(find(andit(find_custom(0,Z[1:end - 1]), find_custom(1,Z[2:end]))))
+#         n10 = length(find(andit(find_custom(1,Z[1:end - 1]), find_custom(0,Z[2:end]))))
+#     else
+#         @printf "Miss! \n"
+#         println("M = $M")
+#         # println("priors = Z00: $(priors.z00), Z01: $(priors.z01), Z10: $(priors.z10), Z1: $(z1), Z0: $(z0)")
+#         n0,n1,n01,n10 = 0,0,0,0
+#         # return 0
+#     end
+#     ret_val = log(pdf(Beta(n01+priors.z01,n0-n01+priors.z00),z0)) + log(pdf(Beta(n10+priors.z10,n1-n10+priors.z11),z1))
+#     # ret_val is -Inf
+#     # println("RETURNING M Z : $ret_val")
+#     return ret_val
+# end
+
+# # return value : logp
 
 function eval_L_N0(L,N0,priors,EQUIV)
-    L0 = mean(mean(L))
+    L0 = mean(L)
     Nd = 7
     Nh = size(L,1)
     D = zeros(Nd)
@@ -232,6 +288,9 @@ function eval_L_N0(L,N0,priors,EQUIV)
             A[j,i] = L[j,i]/(L0/D[i])
         end
     end
+    # --------------- --------------- --------------- --------------- --------------- --------------- ---------------
+    # --------------- --------------- ---------------    retval = 0   --------------- --------------- ---------------
+    # --------------- --------------- --------------- --------------- --------------- --------------- ---------------
     ret_val = 0
     paD = priors.aD
     aD = zeros(1,Nd)
@@ -254,15 +313,29 @@ function eval_L_N0(L,N0,priors,EQUIV)
     @match EQUIV[2] begin
         1 => A, aH, paH = sum(A,2)/Nd, sum(aH,2), sum(paH,2)
         2 => A, aH, paH = [(A[:,1]+A[:,7])/2,sum(:,2:6,2)/5], [(aH[:,1]+aH[:,7])/2,sum(:,2:6,2)/5], [(paH[:,1]+paH[:,7])/2,sum(:,2:6,2)/5]
-        3 => A, aH, paH = A, aH, paH
     end
-    ret_val = 0
+    # --------------- --------------- --------------- --------------- --------------- --------------- ---------------
+    # --------------- --------------- ---------------    retval = 0   --------------- --------------- ---------------
+    # --------------- --------------- --------------- --------------- --------------- --------------- ---------------
     # i need to add the 1e-99 because julia does not have an infinity integrated with the distributions package...
-    ret_val = ret_val + log((pdf(Gamma(sum(sum(N0)) + 1e-99),L0)) + priors.aL, 1/(length(N0)+priors.bL))
+    # @printf "\n ret_val1 LN0 = %f  " ret_val
+    ret_val = log((pdf(Gamma(sum(N0) + priors.aL,1/(length(N0)+priors.bL)),L0)) + 0.00001)
+    # --------------- --------------- --------------- --------------- --------------- --------------- ---------------
+    # --------------- --------------- ---------------   retval = ??   --------------- --------------- ---------------
+    # --------------- --------------- --------------- --------------- --------------- --------------- ---------------
+    # @printf "\n ret_val2 LN0 = %f " ret_val
+    # @printf "\n Nd = %f" Nd # always 7
+    # println("paD = $paD") # always [5,5,5...]
     ret_val = ret_val + dirlnpdf(D/Nd,aD+paD)
-    for i=1:size(A,2),
-        ret_val = ret_val + dirlnpdf(A[:,i]/Nh,aH[:,i]+paH[:,i]);
+    # println("ret_val = $ret_val \n D = $D \n aD = $aD \n")
+    # println("D/Nd = $(D/Nd) \n aD+paD = $(aD+paD)")
+    # @printf "\n ret_val3 LN0 = %f " ret_val
+    for i=1:size(A,2)
+        ret_val = ret_val + dirlnpdf(A[:,i]/Nh,aH[:,i]+paH[:,i])
+        # println("ret_val = $ret_val \n A[:,i]/Nh = $(A[:,i]/Nh) \n aH[:,i]+paH[:,i] = $(aH[:,i]+paH[:,i]) \n")
+        # println("return value = $ret_val, i = $i")
     end
+    # println("\n ret_valf L N0 = $ret_val")
     return ret_val
 end
 
@@ -325,7 +398,7 @@ function dirpdf(X,A)
         p = 1
         return p
     end
-    logp = sum((A-1).*log(X)) - sum(log(gamma(A))) + log(gamma(sum(A)))
+    logp = sum((A.-1).*log(X.+0.000001)) - sum(log(gamma(A).+0.000001)) + log(gamma(sum(A)).+0.000001)
     p = exp(logp)
     return p
 end
@@ -333,13 +406,10 @@ end
 # return value : logp
 
 function dirlnpdf(X,A)
-    k = length(X)
-    if  k==1
-        p=1
-        return 0
+    if length(X) == 1
+        return 1
     end
-    ret_val = sum((A.-1).*log(X)) .- sum(log(gamma(A))) + log(gamma(sum(A)))
-    return ret_val
+    retval = sum((A.-1).*log(X .+ 0.000001))
 end
 
 # return value : p 
@@ -416,7 +486,7 @@ function draw_Z_NLM(N,L,M,priors)
                 Z[t] = 1
                 # likelihood of all possible event/normal combinations (all
                 # possible values of N(E)
-                ptmp = poisslnpdf(0:N[t],1)#L[t]) + nbinlnpdf(N[t]:-1:0,priors.aE,priors.bE/(1+priors.bE))
+                ptmp = poisslnpdf(0:N[t],L[t]) + nbinlnpdf(N[t]:-1:0,priors.aE,priors.bE/(1+priors.bE))
                 ptmp=ptmp.-maximum(ptmp)        # WARNING!!!!!!
                 ptmp=exp(ptmp)
                 ptmp=ptmp/sum(ptmp)
@@ -614,7 +684,7 @@ end
 # delete all of this if you want only function definitions
 
 time_postcomp = time()
-
+# println("dirpdf = $(dirpdf([1,.3,.2,.1],.5))")
 # make sure we are in the correct directory otherwise we won't be able to find
 # data.mat
 vars = matread("data.mat")
@@ -626,12 +696,13 @@ Ni = vars["Nin"]
 No = vars["Nout"]
 pri = prior(1,1,zeros(1,7)+5,zeros(48,7)+1,9900,100,2500,7500,5,1/3,0)
 time_postparse = time()
-sensorMCMC(Ni,pri,event)
+results = sensorMCMC(Ni,pri,event)
 time_posttest = time()
 
-println("Results - ")
-println("Compilation Time : $time_precomp - $time_postcomp = $(-(time_precomp) + (time_postcomp))")
-println("Data Read Time   : $time_postcomp - $time_postdata = $(-(time_postcomp) + (time_postdata))")
-println("Parsing Time     : $time_postdata - $time_postparse = $(-(time_postdata) + (time_postparse))")
-println("Execution Time   : $time_postparse - $time_posttest = $(-(time_postparse) + (time_posttest))")
+println("\n ------------------ \n Result = logpc = $(results.logpC) ; logpgd = $(results.logpGD) \n ------------------ \n")
 
+# println("Results - ")
+# println("Compilation Time : $time_precomp - $time_postcomp = $(-(time_precomp) + (time_postcomp))")
+# println("Data Read Time   : $time_postcomp - $time_postdata = $(-(time_postcomp) + (time_postdata))")
+# println("Parsing Time     : $time_postdata - $time_postparse = $(-(time_postdata) + (time_postparse))")
+# println("Execution Time   : $time_postparse - $time_posttest = $(-(time_postparse) + (time_posttest))")
