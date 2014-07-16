@@ -698,11 +698,31 @@ pri = prior(1,1,zeros(1,7)+5,zeros(48,7)+1,9900,100,2500,7500,5,1/3,0)
 time_postparse = time()
 results = sensorMCMC(Ni,pri,event)
 time_posttest = time()
+Result_X = [1.0:length(results.L)]
+L_temp = zeros(length(results.L))
+L_temp_2 = zeros(size(results.L)[1],size(results.L)[2])
+L_temp_3 = zeros(size(results.L)[2],size(results.L)[1])
+for i = 1:length(L_temp)
+    L_temp[i] = (results.L)[i]
+end
+for i = 1:length(L_temp_2)
+    L_temp_2[i] = (results.L)[i]
+end
+for i = 1:length(L_temp_3)
+    L_temp_3[i] = (results.L)[i]
+end
+plot(Result_X,L_temp)
+savefig("L_all.png")
+plot(Result_X,L_temp_2)
+savefig("L_Daily.png")
+plot(Result_X,L_temp_3)
+savefig("L_HalfHourly.png")
+
 
 println("\n ------------------ \n Result = logpc = $(results.logpC) ; logpgd = $(results.logpGD) \n ------------------ \n")
 
-# println("Results - ")
-# println("Compilation Time : $time_precomp - $time_postcomp = $(-(time_precomp) + (time_postcomp))")
-# println("Data Read Time   : $time_postcomp - $time_postdata = $(-(time_postcomp) + (time_postdata))")
-# println("Parsing Time     : $time_postdata - $time_postparse = $(-(time_postdata) + (time_postparse))")
-# println("Execution Time   : $time_postparse - $time_posttest = $(-(time_postparse) + (time_posttest))")
+println("Results - ")
+println("Compilation Time : $time_precomp - $time_postcomp = $(-(time_precomp) + (time_postcomp))")
+println("Data Read Time   : $time_postcomp - $time_postdata = $(-(time_postcomp) + (time_postdata))")
+println("Parsing Time     : $time_postdata - $time_postparse = $(-(time_postdata) + (time_postparse))")
+println("Execution Time   : $time_postparse - $time_posttest = $(-(time_postparse) + (time_posttest))")
